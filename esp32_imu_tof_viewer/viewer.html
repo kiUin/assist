@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>IMU + ToF Viewer</title>
+  <style>
+    body { font-family: sans-serif; margin: 12px; background: #1a1a1a; color: #eee; }
+    h1 { font-size: 1.2em; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+    .panel { background: #2a2a2a; padding: 12px; border-radius: 8px; min-width: 200px; }
+    .panel h2 { margin: 0 0 8px 0; font-size: 0.95em; color: #8af; }
+    input[type="text"] { width: 220px; padding: 6px; font-family: monospace; }
+    button { padding: 6px 12px; cursor: pointer; }
+    #canv { width: 400px; height: 400px; display: block; border-radius: 8px; }
+    .val { font-family: monospace; font-size: 0.9em; }
+    .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+    .status.connected { background: #4a4; }
+    .status.disconnected { background: #a44; }
+    label { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>IMU + ToF WebSocket Viewer</h1>
+  <div class="row">
+    <div class="panel">
+      <h2>Connection</h2>
+      <div>
+        <span class="status disconnected" id="statusDot"></span>
+        <span id="statusText">Disconnected</span>
+      </div>
+      <div style="margin-top:8px">
+        <input type="text" id="wsUrl" value="ws://192.168.4.1:81" placeholder="ws://192.168.4.1:81">
+        <button id="btnConnect">Connect</button>
+        <button id="btnDisconnect">Disconnect</button>
+      </div>
+      <div style="margin-top:8px">
+        Packet rate: <span id="packetRate" class="val">0</span> Hz
+      </div>
+      <label>
+        <input type="checkbox" id="axisRemap"> Axis remap (swap if cube orientation wrong)
+      </label>
+    </div>
+    <div class="panel">
+      <h2>Distance (ToF)</h2>
+      <div>raw_mm: <span id="raw_mm" class="val">—</span></div>
+      <div>vertical_mm: <span id="vertical_mm" class="val">—</span></div>
+      <div>range_status: <span id="range_status" class="val">—</span></div>
+    </div>
+    <div class="panel">
+      <h2>Orientation (BNO055)</h2>
+      <div>quat w,x,y,z: <span id="quat" class="val">—</span></div>
+      <div>yaw, pitch, roll: <span id="euler" class="val">—</span></div>
+      <div>gravity x,y,z: <span id="grav" class="val">—</span></div>
+      <div>cal sys,g,a,m: <span id="cal" class="val">—</span></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <div class="panel">
+      <h2>3D Cube (quaternion)</h2>
+      <canvas id="canv"></canvas>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    (function() {
+      const wsUrlEl = document.getElementById('wsUrl');
+      const btnConnect = document.getElementById('btnConnect');
+      const btnDisconnect = document.getElementById('btnDisconnect');
+      const statusDot = document.getElementById('statusDot');
+      const statusText = document.getElementById('statusText');
+      const packetRateEl = document.getElementById('packetRate');
+      const axisRemapEl = document.getElementById('axisRemap');
+
+      let ws = null;
+      let lastPacketTime = 0;
+      let packetCount = 0;
+      let rateWindow = [];
+      const RATE_WINDOW_MS = 1000;
+
+      function setConnected(ok) {
+        statusDot.className = 'status ' + (ok ? 'connected' : 'disconnected');
+        statusText.textContent = ok ? 'Connected' : 'Disconnected';
+      }
+
+      function updateRate() {
+        const now = Date.now();
+        rateWindow.push(now);
+        while (rateWindow.length > 0 && now - rateWindow[0] > RATE_WINDOW_MS) rateWindow.shift();
+        packetRateEl.textContent = rateWindow.length;
+      }
+
+      function connect() {
+        if (ws && ws.readyState === WebSocket.OPEN) return;
+        const url = wsUrlEl.value.trim();
+        if (!url) return;
+        try {
+          ws = new WebSocket(url);
+          ws.onopen = function() { setConnected(true); };
+          ws.onclose = function() { setConnected(false); ws = null; };
+          ws.onerror = function() { setConnected(false); };
+          ws.onmessage = function(ev) {
+            try {
+              const obj = JSON.parse(ev.data);
+              onPacket(obj);
+              updateRate();
+            } catch (e) {}
+          };
+        } catch (e) {
+          statusText.textContent = 'Error: ' + e.message;
+        }
+      }
+
+      function disconnect() {
+        if (ws) {
+          ws.close();
+          ws = null;
+        }
+        setConnected(false);
+      }
+
+      btnConnect.addEventListener('click', connect);
+      btnDisconnect.addEventListener('click', disconnect);
+
+      function onPacket(obj) {
+        document.getElementById('raw_mm').textContent = obj.raw_mm != null ? obj.raw_mm : '—';
+        document.getElementById('vertical_mm').textContent = obj.vertical_mm != null ? obj.vertical_mm.toFixed(1) : '—';
+        document.getElementById('range_status').textContent = obj.range_status != null ? obj.range_status : '—';
+
+        if (obj.quat_w != null) {
+          document.getElementById('quat').textContent = [obj.quat_w, obj.quat_x, obj.quat_y, obj.quat_z].map(function(v){ return v != null ? v.toFixed(3) : '—'; }).join(', ');
+        }
+        if (obj.yaw != null) {
+          // Display order: yaw, pitch, roll — swap yaw/pitch values to match labels
+          document.getElementById('euler').textContent = [obj.pitch, obj.yaw, obj.roll].map(function(v){ return v != null ? v.toFixed(1) : '—'; }).join(', ');
+        }
+        if (obj.grav_x != null) {
+          document.getElementById('grav').textContent = [obj.grav_x, obj.grav_y, obj.grav_z].map(function(v){ return v != null ? v.toFixed(2) : '—'; }).join(', ');
+        }
+        if (obj.cal_sys != null) {
+          document.getElementById('cal').textContent = [obj.cal_sys, obj.cal_g, obj.cal_a, obj.cal_m].join(', ');
+        }
+
+        // Only drive cube with real IMU quaternion (skip when BNO055 failed / placeholder)
+        if (!obj.bno_error && obj.quat_w != null && obj.quat_x != null && obj.quat_y != null && obj.quat_z != null) {
+          updateCubeQuat(obj.quat_w, obj.quat_x, obj.quat_y, obj.quat_z);
+        }
+      }
+
+      // Three.js cube
+      let scene, camera, renderer, cube;
+      const canvas = document.getElementById('canv');
+
+      function initThree() {
+        if (typeof THREE === 'undefined') {
+          canvas.parentElement.innerHTML += '<p style="color:#a44">Three.js failed to load. Open this page over HTTP or check network.</p>';
+          return;
+        }
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+        camera.position.set(2.2, 2.2, 2.2);
+        camera.lookAt(0, 0, 0);
+        renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+        renderer.setSize(400, 400);
+        renderer.setPixelRatio(window.devicePixelRatio || 1);
+
+        const geo = new THREE.BoxGeometry(1, 1, 1);
+        const mat = new THREE.MeshNormalMaterial();
+        cube = new THREE.Mesh(geo, mat);
+        scene.add(cube);
+        animate();
+      }
+
+      function updateCubeQuat(w, x, y, z) {
+        if (!cube) return;
+        if (axisRemapEl.checked) {
+          var t = x; x = y; y = t;
+        }
+        cube.quaternion.set(x, y, z, w);
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        if (renderer && scene) renderer.render(scene, camera);
+      }
+
+      initThree();
+    })();
+  </script>
+</body>
+</html>
