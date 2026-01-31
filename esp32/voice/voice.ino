@@ -2,7 +2,10 @@
 #include <Wire.h>
 #include "DFRobot_DF2301Q.h"
 
-// ================= SERVO =================
+// VOICE RECOGNITION MODULE COMMANDS: LEARNING WAKE WORD, LEARNING COMMAND WORD, EXIT LEARNING, I WANT TO DELETE. 
+// MORE INFROMATION: https://wiki.dfrobot.com/SKU_SEN0539-EN_Gravity_Voice_Recognition_Module_I2C_UART#target_4 
+
+// ================= SERVO CONFIGURATION =================
 static const int SERVO_PIN = 18;
 static const int PWM_FREQ  = 50;
 static const int PWM_RES   = 16;
