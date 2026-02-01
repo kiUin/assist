@@ -11,7 +11,7 @@
     .panel h2 { margin: 0 0 8px 0; font-size: 0.95em; color: #8af; }
     input[type="text"] { width: 220px; padding: 6px; font-family: monospace; }
     button { padding: 6px 12px; cursor: pointer; }
-    #canv { width: 400px; height: 400px; display: block; border-radius: 8px; }
+    #canv, #canvModel { width: 400px; height: 400px; display: block; border-radius: 8px; }
     .val { font-family: monospace; font-size: 0.9em; }
     .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
     .status.connected { background: #4a4; }
@@ -59,9 +59,14 @@
       <h2>3D Cube (quaternion)</h2>
       <canvas id="canv"></canvas>
     </div>
+    <div class="panel">
+      <h2>3D Model (quaternion)</h2>
+      <canvas id="canvModel"></canvas>
+    </div>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script>
     (function() {
       const wsUrlEl = document.getElementById('wsUrl');
@@ -141,15 +146,19 @@
           document.getElementById('cal').textContent = [obj.cal_sys, obj.cal_g, obj.cal_a, obj.cal_m].join(', ');
         }
 
-        // Only drive cube with real IMU quaternion (skip when BNO055 failed / placeholder)
+        // Only drive cube and model with real IMU quaternion (skip when BNO055 failed / placeholder)
         if (!obj.bno_error && obj.quat_w != null && obj.quat_x != null && obj.quat_y != null && obj.quat_z != null) {
-          updateCubeQuat(obj.quat_w, obj.quat_x, obj.quat_y, obj.quat_z);
+          updateQuaternions(obj.quat_w, obj.quat_x, obj.quat_y, obj.quat_z);
         }
       }
 
       // Three.js cube
       let scene, camera, renderer, cube;
       const canvas = document.getElementById('canv');
+
+      // Three.js GLTF model
+      let sceneModel, cameraModel, rendererModel, modelMesh = null;
+      const canvasModel = document.getElementById('canvModel');
 
       function initThree() {
         if (typeof THREE === 'undefined') {
@@ -168,20 +177,58 @@
         const mat = new THREE.MeshNormalMaterial();
         cube = new THREE.Mesh(geo, mat);
         scene.add(cube);
+
+        initThreeModel();
         animate();
       }
 
-      function updateCubeQuat(w, x, y, z) {
-        if (!cube) return;
+      function initThreeModel() {
+        sceneModel = new THREE.Scene();
+        cameraModel = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+        cameraModel.position.set(2.2, 2.2, 2.2);
+        cameraModel.lookAt(0, 0, 0);
+        rendererModel = new THREE.WebGLRenderer({ canvas: canvasModel, antialias: true });
+        rendererModel.setSize(400, 400);
+        rendererModel.setPixelRatio(window.devicePixelRatio || 1);
+
+        var ambient = new THREE.AmbientLight(0xffffff, 0.8);
+        var dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(2, 4, 3);
+        sceneModel.add(ambient);
+        sceneModel.add(dirLight);
+
+        if (typeof THREE.GLTFLoader !== 'undefined') {
+          const loader = new THREE.GLTFLoader();
+          loader.load('DoubleEnded_EatingServo - Part 1.gltf', function(gltf) {
+            modelMesh = gltf.scene;
+            modelMesh.scale.setScalar(35);
+            modelMesh.traverse(function(child) {
+              if (child instanceof THREE.Mesh) {
+                child.material = new THREE.MeshNormalMaterial();
+              }
+            });
+            sceneModel.add(modelMesh);
+          }, undefined, function(err) {
+            console.error('Model load failed:', err);
+            canvasModel.parentElement.innerHTML += '<p style="color:#a44">Model load failed. Open page over HTTP (same folder as .gltf).</p>';
+          });
+        } else {
+          canvasModel.parentElement.innerHTML += '<p style="color:#a44">GLTFLoader not available.</p>';
+        }
+      }
+
+      function updateQuaternions(w, x, y, z) {
         if (axisRemapEl.checked) {
           var t = x; x = y; y = t;
         }
-        cube.quaternion.set(x, y, z, w);
+        if (cube) cube.quaternion.set(x, y, z, w);
+        if (modelMesh) modelMesh.quaternion.set(x, y, z, w);
       }
 
       function animate() {
         requestAnimationFrame(animate);
         if (renderer && scene) renderer.render(scene, camera);
+        if (rendererModel && sceneModel) rendererModel.render(sceneModel, cameraModel);
       }
 
       initThree();
